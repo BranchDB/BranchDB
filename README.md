@@ -1,5 +1,7 @@
-# GitDB: A Git-Inspired Version-Controlled Database   
-**Members**:  
+# GitDB: A Git-Inspired Version-Controlled Database
+**Group Name**:
+- Version Controllers
+**Members**:
 - Avni Kanodia (`avnik2`)  
 - Dibyadeep Saha (`saha18`)
 
@@ -39,18 +41,17 @@ GitDB provides **built-in version control** with familiar Git semantics, solving
 | **Merge Engine**        | Three-way schema merging + CRDT data resolution                             | `similar` (diffs)         |  
 
 ### **Roadmap**  
-#### **Checkpoint 1 (04/15): Core Versioning & Branching**  
+#### **Checkpoint 1: Core Versioning & Branching**  
 - [ ] Append-only commit storage (`sled` + `blake3`)  
 - [ ] Row-level versioning with CRDTs (`crdt-rs`)  
 - [ ] Basic branch creation/deletion (`gitoxide` integration)  
 - [ ] CLI interface for commits/branches (`clap`)  
 
-#### **Checkpoint 2 (04/30): Merging & Query Interface**  
+#### **Checkpoint 2: Merging & Query Interface**  
 - [ ] Three-way schema merging (`similar` for diffing)  
 - [ ] CRDT-based row conflict resolution  
 - [ ] SQL time-travel parser (`sqlparser-rs`)  
-- [ ] Historical state reconstruction (`polars` for query execution)  
-- [ ] Demo: Merge two branches with data conflicts  
+- [ ] Historical state reconstruction (`polars` for query execution) 
 
 ---
 
@@ -59,12 +60,3 @@ GitDB provides **built-in version control** with familiar Git semantics, solving
 2. **Storage Overhead**: Versioning every row could bloat storage (mitigation: delta encoding with `zstd`).  
 3. **Query Performance**: Reconstructing historical states may be slow (solution: materialized snapshots).  
 4. **Rust Learning Curve**: Working with `sled`’s atomic operations and `gitoxide`’s internals.  
-
----
-
-## **Stretch Goals**  
-- Distributed sync (à la `git push/pull`)  
-- Web UI for visualizing database diffs  
-- CI/CD integration (test schema changes pre-merge)  
-
-**License**: MIT
