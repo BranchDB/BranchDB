@@ -1,6 +1,7 @@
 # GitDB: A Git-Inspired Version-Controlled Database
 **Group Name**:
 - Version Controllers
+
 **Members**:
 - Avni Kanodia (`avnik2`)  
 - Dibyadeep Saha (`saha18`)
