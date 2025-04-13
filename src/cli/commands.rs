@@ -34,7 +34,6 @@ pub fn handle_commit(storage: &CommitStorage, message: &str) -> Result<()> {
 
 pub fn handle_branch(branch_mgr: &BranchManager, name: &str, delete: bool) -> Result<()> {
     if delete {
-        // Delete branch implementation for Checkpoint 2
         println!("Branch deletion coming in Checkpoint 2");
     } else {
         branch_mgr.create_branch(name)?;

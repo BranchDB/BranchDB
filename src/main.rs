@@ -1,11 +1,11 @@
 use clap::Parser;
-use gitdb::{cli::commands, core::{CommitStorage, BranchManager}};
-use crate::error::GitDBError;
+use gitdb::cli::commands;
+use gitdb::core::{CommitStorage, BranchManager};
+use gitdb::error::GitDBError;
 
 fn main() -> Result<(), GitDBError> {
     let args = commands::Commands::parse();
     
-    // Initialize components
     let storage = CommitStorage::open("./data")?;
     let branch_mgr = BranchManager::open("./data".as_ref())?;
 

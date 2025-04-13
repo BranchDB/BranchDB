@@ -1,4 +1,4 @@
-use gix::{Repository, refs::{FullNameRef, transaction::PreviousValue}};
+use gix::{Repository, refs::transaction::PreviousValue};
 use std::path::Path;
 use crate::error::{Result, GitDBError};
 

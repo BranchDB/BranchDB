@@ -1,6 +1,11 @@
 use sled::Db;
-use blake3::{self, Hash};
-use crate::{error::Result, core::models::{Commit, Change}, error::GitDBError};
+use blake3;
+use std::time::{SystemTime, UNIX_EPOCH};
+use crate::{
+    error::Result, 
+    core::models::{Commit, Change}, 
+    error::GitDBError
+};
 
 pub struct CommitStorage {
     db: Db,

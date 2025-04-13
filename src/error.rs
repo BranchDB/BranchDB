@@ -1,7 +1,7 @@
 use thiserror::Error;
 use sled;
 use bincode;
-use gix::Error as GixError;
+use gix::errors::Error as GixError;
 use std::fmt;
 
 #[derive(Error, Debug)]
