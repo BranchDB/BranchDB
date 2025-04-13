@@ -1,10 +1,9 @@
 use thiserror::Error;
 use sled;
 use bincode;
-use gix::errors::Error as GixError;
-use std::fmt;
+use gix::object::Error as GixError; 
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
 pub enum GitDBError {
     #[error("Storage error: {0}")]
     Storage(#[from] sled::Error),
@@ -40,33 +39,11 @@ impl From<GixError> for GitDBError {
     }
 }
 
-impl From<Box<bincode::ErrorKind>> for GitDBError {
-    fn from(err: Box<bincode::ErrorKind>) -> Self {
-        GitDBError::Serialization(*err)
-    }
-}
-
 impl From<sled::transaction::TransactionError<sled::Error>> for GitDBError {
     fn from(err: sled::transaction::TransactionError<sled::Error>) -> Self {
         match err {
             sled::transaction::TransactionError::Storage(e) => GitDBError::Storage(e),
             sled::transaction::TransactionError::Abort(e) => GitDBError::Storage(e),
-        }
-    }
-}
-
-impl fmt::Display for GitDBError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            GitDBError::Storage(e) => write!(f, "Storage error: {}", e),
-            GitDBError::Git(e) => write!(f, "Git operation failed: {}", e),
-            GitDBError::Serialization(e) => write!(f, "Serialization error: {}", e),
-            GitDBError::BranchExists(name) => write!(f, "Branch '{}' already exists", name),
-            GitDBError::BranchNotFound(name) => write!(f, "Branch '{}' not found", name),
-            GitDBError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
-            GitDBError::OrphanCommit => write!(f, "Commit has no parent"),
-            GitDBError::TypeMismatch(msg) => write!(f, "Type mismatch: {}", msg),
-            GitDBError::MergeConflict(msg) => write!(f, "Merge conflict: {}", msg),
         }
     }
 }

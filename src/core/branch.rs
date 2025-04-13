@@ -9,7 +9,7 @@ pub struct BranchManager {
 impl BranchManager {
     pub fn open(path: &Path) -> Result<Self> {
         Ok(Self {
-            repo: Repository::discover(path)
+            repo: Repository::init(path)
                 .map_err(|e| GitDBError::Git(e.to_string()))?
         })
     }
@@ -26,11 +26,11 @@ impl BranchManager {
         let head = self.repo.head().map_err(|e| GitDBError::Git(e.to_string()))?;
         let commit = head.peel_to_commit_in_place()
             .map_err(|e| GitDBError::Git(e.to_string()))?
-            .expect("HEAD should point to a commit");
+            .to_owned(); 
         
         self.repo
             .reference(
-                format!("refs/heads/{}", name).as_str(),
+                format!("refs/heads/{}", name),
                 commit.id(),
                 PreviousValue::Any,
                 "create branch",

@@ -1,5 +1,4 @@
 use serde::{Serialize, Deserialize};
-use blake3::Hash;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Change {

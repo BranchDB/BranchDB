@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crdts::{CmRDT, CvRDT, GCounter, LWWReg};
+use crdts::{CvRDT, GCounter, LWWReg};
 use crate::{
     core::models::Change,
     error::{GitDBError, Result},
@@ -65,8 +65,7 @@ impl CrdtEngine {
                 if let Some(table_data) = self.state.get_mut(table) {
                     table_data.remove(id);
                 }
-            },
-            _ => {} // Ignore other change types for now
+            }
         }
         Ok(())
     }

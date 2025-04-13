@@ -1,9 +1,8 @@
 use clap::Subcommand;
-use core::database::CommitStorage;
-use core::branch::BranchManager;
-use error::Result;
+use crate::core::database::CommitStorage;
+use crate::core::branch::BranchManager;
+use crate::error::{Result, GitDBError};
 use hex;
-use gix::bstr::ByteSlice;
 
 #[derive(Subcommand)]
 pub enum Commands {
@@ -28,7 +27,7 @@ pub fn handle_commit(storage: &CommitStorage, message: &str) -> Result<()> {
     
     let changes = vec![]; // Would collect changes interactively
     let hash = storage.create_commit(message, changes)?;
-    println!("Created commit {}", hex::encode(hash.as_bytes()));
+    println!("Created commit {}", hex::encode(&hash));
     Ok(())
 }
 

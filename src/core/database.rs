@@ -22,24 +22,23 @@ impl CommitStorage {
         let parent = self.get_head()?.ok_or(GitDBError::OrphanCommit)?;
         
         let commit = Commit {
-            id: blake3::hash(&serialized_data),
-            parent: parent,
-            data: serialized_data,
+            parents: vec![parent],
+            message: message.to_string(),
             timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            changes,
         };
         
         let serialized = bincode::serialize(&commit)?;
         let hash = blake3::hash(&serialized);
-        let hash_bytes: [u8; 32] = *hash.as_bytes();  // Convert to byte array
+        let hash_bytes: [u8; 32] = *hash.as_bytes();
         
-        // Store using the bytes directly
         self.db.transaction(|tx| {
-            tx.insert(&hash_bytes, serialized)?;
+            tx.insert(&hash_bytes, serialized.as_slice())?;  
             tx.insert(b"HEAD", &hash_bytes)?;
             Ok(())
         })?;
         
-        Ok(hash_bytes)  // Return the byte array instead of Hash
+        Ok(hash_bytes)
     }
 
     fn get_head(&self) -> Result<Option<[u8; 32]>> {
