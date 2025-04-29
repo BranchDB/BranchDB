@@ -1,76 +1,67 @@
-use std::collections::HashMap;
-use crdts::{CvRDT, GCounter, LWWReg};
-use crate::{
-    core::models::Change,
-    error::{GitDBError, Result},
-};
 use serde::{Serialize, Deserialize};
+use crate::error::{GitDBError, Result};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum CrdtValue {
-    Counter(GCounter<u64>),
-    Register(LWWReg<Vec<u8>, String>),
+    Counter(u64),
+    Register(Vec<u8>),
 }
 
-impl CrdtValue {
-    pub fn merge(&mut self, other: &Self) -> Result<()> {
-        match (self, other) {
-            (CrdtValue::Counter(a), CrdtValue::Counter(b)) => {
-                a.merge(b.clone());
-                Ok(())
-            },
-            (CrdtValue::Register(a), CrdtValue::Register(b)) => {
-                a.merge(b.clone());
-                Ok(())
-            },
-            _ => Err(GitDBError::TypeMismatch(
-                "Cannot merge different CRDT types".to_string()
-            )),
-        }
-    }
-}
-
+#[derive(Debug, Clone)]
 pub struct CrdtEngine {
-    state: HashMap<String, HashMap<Vec<u8>, CrdtValue>>,
+    pub state: std::collections::HashMap<String, std::collections::HashMap<String, CrdtValue>>,
 }
 
 impl CrdtEngine {
     pub fn new() -> Self {
         Self {
-            state: HashMap::new(),
+            state: std::collections::HashMap::new(),
         }
     }
 
-    pub fn apply_change(&mut self, change: &Change) -> Result<()> {
+    pub fn apply_change(&mut self, change: &crate::core::models::Change) -> Result<()> {
         match change {
-            Change::Insert { table, id, data } => {
-                let value: CrdtValue = bincode::deserialize(data)?;
-                self.state
-                    .entry(table.clone())
-                    .or_default()
-                    .insert(id.clone(), value);
-            },
-            Change::Update { table, id, data } => {
-                let new_value: CrdtValue = bincode::deserialize(data)?;
-                if let Some(table_data) = self.state.get_mut(table) {
-                    table_data
-                        .entry(id.clone())
-                        .and_modify(|existing| {
-                            existing.merge(&new_value).expect("Type-checked merge");
-                        })
-                        .or_insert(new_value);
-                }
-            },
-            Change::Delete { table, id } => {
-                if let Some(table_data) = self.state.get_mut(table) {
-                    table_data.remove(id);
+            crate::core::models::Change::Insert { table, id, value } |
+            crate::core::models::Change::Update { table, id, value } => {
+                let table_map = self.state.entry(table.clone()).or_default();
+                let deserialized: CrdtValue = bincode::deserialize(value)?;
+                table_map.insert(id.clone(), deserialized);
+            }
+            crate::core::models::Change::Delete { table, id } => {
+                if let Some(table_map) = self.state.get_mut(table) {
+                    table_map.remove(id);
                 }
             }
         }
         Ok(())
     }
 
-    pub fn get_value(&self, table: &str, id: &[u8]) -> Option<&CrdtValue> {
-        self.state.get(table)?.get(id)
+    pub fn merge(&mut self, other: &Self) -> Result<()> {
+        for (table, rows) in &other.state {
+            let entry = self.state.entry(table.clone()).or_default();
+            for (id, new_val) in rows {
+                match (entry.get_mut(id), new_val) {
+                    (Some(CrdtValue::Counter(a)), CrdtValue::Counter(b)) => {
+                        *a = (*a).max(*b);
+                    }
+                    (Some(CrdtValue::Register(a)), CrdtValue::Register(b)) => {
+                        if *b > *a {
+                            *a = b.clone();
+                        }
+                    }
+                    (None, val) => {
+                        entry.insert(id.clone(), val.clone());
+                    }
+                    _ => {
+                        return Err(GitDBError::TypeMismatch("cannot merge different CRDT types".into()));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn into_data(self) -> std::collections::HashMap<String, std::collections::HashMap<String, CrdtValue>> {
+        self.state
     }
 }
