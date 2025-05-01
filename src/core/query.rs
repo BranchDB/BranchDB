@@ -5,9 +5,12 @@ use rocksdb::DB;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use sqlparser::ast::{Statement, Query, SetExpr};
+use std::collections::HashMap;
+use crate::core::models::Change;
+use crate::core::crdt::CrdtValue;
 
 pub struct QueryProcessor<'a> {
-    db: &'a DB,
+    db: &'a DB
 }
 
 impl<'a> QueryProcessor<'a> {
@@ -77,5 +80,41 @@ impl<'a> QueryProcessor<'a> {
 
         let commit: Commit = bincode::deserialize(&raw)?;
         Ok(commit)
+    }
+
+    pub fn get_table_at_commit(&self, table: &str, commit_hash: &[u8]) -> Result<HashMap<String, CrdtValue>> {
+        let mut engine = CrdtEngine::new();
+        let mut current_hash = commit_hash.to_vec();
+        
+        // Walk through commit history
+        while !current_hash.is_empty() {
+            let commit = self.get_commit_by_hash(&hex::encode(&current_hash))?;
+            
+            // Apply relevant changes in reverse order (newest first)
+            for change in commit.changes.iter().rev() {
+                match change {
+                    Change::Insert { table: change_table, .. } |
+                    Change::Update { table: change_table, .. } |
+                    Change::Delete { table: change_table, .. } => {
+                        if change_table == table {
+                            engine.apply_change(change)?;
+                        }
+                    }
+                }
+            }
+            
+            // Move to parent commit (using first parent for simplicity)
+            current_hash = commit.parents.get(0).map(|p| p.to_vec()).unwrap_or_default();
+        }
+        
+        Ok(engine.state.get(table)
+           .map(|rows| rows.clone())
+           .unwrap_or_default())
+    }
+
+    pub fn get_head_hash(&self) -> Result<Vec<u8>> {
+        self.db.get(b"HEAD")
+            .map_err(GitDBError::StorageError)?
+            .ok_or_else(|| GitDBError::InvalidInput("No HEAD commit".into()))
     }
 }

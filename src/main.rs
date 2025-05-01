@@ -6,39 +6,33 @@ use gitdb::error::GitDBError;
 use std::fs;
 use std::path::Path;
 
-fn ensure_data_dir() -> std::io::Result<()> {
+fn ensure_data_dir() -> Result<(), GitDBError> {
     if !Path::new("./data").exists() {
-        fs::create_dir("./data")?;
+        fs::create_dir("./data").map_err(|e| GitDBError::InvalidInput(format!("Failed to create data dir: {}", e)))?;
     }
     Ok(())
 }
 
 fn run() -> Result<(), GitDBError> {
-    ensure_data_dir().map_err(|e| GitDBError::InvalidInput(format!("Failed to create ./data dir: {}", e)))?;
-
+    ensure_data_dir()?;
     let args = CommandsWrapper::parse().command;
-
-    // Open the storage first (this initializes the global DB)
+    
+    // Open storage
     let storage = CommitStorage::open("./data")?;
     
-    // Create BranchManager using the same DB instance
-    let branch_mgr = BranchManager {
-        db: storage.db,
-    };
+    // Create branch manager with shared DB
+    let branch_mgr = BranchManager::new(storage.db.clone());
 
     match args {
-        Commands::Commit { message } => {
-            commands::handle_commit(&storage, &message)?;
-        }
-        Commands::Branch { name, delete } => {
-            commands::handle_branch(&branch_mgr, &name, delete)?;
-        }
-        Commands::Query { sql } => {
-            commands::handle_query(&sql, storage.db)?;
+        Commands::Commit { message } => commands::handle_commit(&storage, &message),
+        Commands::Branch { name, delete } => commands::handle_branch(&branch_mgr, &name, delete),
+        Commands::Query { sql } => commands::handle_query(&sql, &storage.db),
+        Commands::Sql { command } => commands::handle_sql(&storage, &command),
+        Commands::ImportCsv { file, table } => commands::handle_import_csv(&storage, &file, &table),
+        Commands::ShowTable { table_name, commit_hash } => {
+            commands::handle_show_table(&*storage.db, &table_name, commit_hash.as_deref())
         }
     }
-
-    Ok(())
 }
 
 fn main() {

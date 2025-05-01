@@ -45,7 +45,7 @@
   WAL_ttl_seconds=0
   bgerror_resume_retry_interval=1000000
   allow_concurrent_memtable_write=true
-  paranoid_checks=false
+  paranoid_checks=true
   WAL_size_limit_MB=0
   lowest_used_cache_tier=kNonVolatileBlockTier
   keep_log_file_num=1000
@@ -59,7 +59,7 @@
   wal_recovery_mode=kPointInTimeRecovery
   db_write_buffer_size=0
   allow_2pc=false
-  skip_checking_sst_file_sizes_on_db_open=true
+  skip_checking_sst_file_sizes_on_db_open=false
   skip_stats_update_on_db_open=false
   recycle_log_file_num=0
   db_host_id=__hostname__

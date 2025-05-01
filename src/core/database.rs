@@ -3,28 +3,20 @@ use blake3;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::core::models::{Commit, Change};
 use crate::error::{GitDBError, Result};
-use once_cell::sync::OnceCell;
-
-static GLOBAL_DB: OnceCell<DB> = OnceCell::new();
+use std::sync::Arc;
 
 pub struct CommitStorage {
-    pub db: &'static DB,
+    pub db: Arc<DB>,
 }
 
 impl CommitStorage {
     pub fn open(path: &str) -> Result<Self> {
-        let db = GLOBAL_DB.get_or_try_init(|| {
-            let mut opts = Options::default();
-            opts.create_if_missing(true);
-            // Add these options to handle locking
-            opts.set_use_fsync(false);
-            opts.set_paranoid_checks(false);
-            opts.set_skip_checking_sst_file_sizes_on_db_open(true);
-            
-            DB::open(&opts, path).map_err(GitDBError::StorageError)
-        })?;
-    
-        Ok(Self { db })
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        let db = DB::open(&opts, path)?;
+        Ok(Self {
+            db: Arc::new(db)
+        })
     }
 
     pub fn create_commit(&self, message: &str, changes: Vec<Change>) -> Result<[u8; 32]> {
