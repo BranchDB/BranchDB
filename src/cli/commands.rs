@@ -202,6 +202,10 @@ pub fn handle_show_table(db: &DB, table_name: &str, commit_hash: Option<&str>) -
     let rows = processor.get_table_at_commit(table_name, &hash)?;
 
     for (id, value) in rows {
+        if id == "!schema" {
+            continue;
+        }
+
         if let CrdtValue::Register(data) = value {
             println!("{}: {}", id, String::from_utf8_lossy(&data));
         }
