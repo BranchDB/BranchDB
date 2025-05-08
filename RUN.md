@@ -20,7 +20,8 @@
 | Command | Description | Example |
 |---------|-------------|---------|
 | `commit` | Record changes to the database | `cargo run -- commit -m "Added users table"` |
-| `branch` | Create, list, or delete branches | `cargo run -- branch new-feature` |
+| `branch` | Create branches | `cargo run -- branch <name>` |
+| `branch` | Delete branches | `cargo run --delete <name>` | 
 | `checkout` | Switch between branches/commits | `cargo run -- checkout main` |
 | `revert` | Revert to a previous state | `cargo run -- revert abc123` |
 | `log` | Show commit history | `cargo run -- log --limit 5` |
@@ -28,17 +29,16 @@
 ### Data Operations
 | Command | Description | Example |
 |---------|-------------|---------|
-| `sql` | Execute SQL commands | `cargo run -- sql "CREATE TABLE users (id TEXT PRIMARY KEY)"` |
+| `sql` | Create SQL table | `cargo run -- sql "CREATE TABLE users (id TEXT, name TEXT)"` |
+| `sql` | Insert data | `cargo run -- sql "INSERT INTO <table_name> VALUES ('value1', 'value2', ...)"` |
 | `import` | Import data from CSV | `cargo run -- import users.csv users` |
-| `query` | Run queries (supports time-travel) | `cargo run -- query "SELECT * FROM users WITH abc123"` |
-| `show` | Display table contents | `cargo run -- show users` |
+| `show-table` | Display table contents | `cargo run -- show-table users` |
 
 ### Advanced Features
 | Command | Description | Example |
 |---------|-------------|---------|
 | `diff` | Compare two commits | `cargo run -- diff abc123 def456` |
 | `merge` | Merge branches | `cargo run -- merge feature-branch` |
-| `status` | Show current branch and changes | `cargo run -- status` |
 
 ## Example Workflow
 1. **Initialize database**  
