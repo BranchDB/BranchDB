@@ -14,7 +14,7 @@ GitDB is a **Rust-native database system** that brings Git's powerful version co
 
 - **Full historical tracking** of all data changes
 - **Branching and merging** workflows for database content
-- **Automatic conflict resolution** using advanced CRDTs
+- **Automatic conflict resolution** using CRDTs
 - **Time-travel queries** to inspect past states
 
 ### Why GitDB Matters
@@ -22,7 +22,7 @@ Traditional databases force users to choose between:
 1. Overwriting data (losing history)
 2. Building complex audit systems (high maintenance)
 
-GitDB would provide **built-in version control** with familiar Git semantics, solving:
+GitDB provides **built-in version control** with familiar Git semantics, solving:
 - **Data recovery** from accidental deletions
 - **Team collaboration** through isolated branches
 - **Debugging** with precise change tracking
@@ -32,30 +32,39 @@ GitDB would provide **built-in version control** with familiar Git semantics, so
 ## **Technical Overview**  
 
 ### **Core Components**  
-| Component               | Description                                                                 | Rust Crates               |  
-|-------------------------|-----------------------------------------------------------------------------|---------------------------|  
-| **Commit Log**          | Append-only transaction store with cryptographic hashing                    | `sled`, `blake3`          |  
-| **CRDT Engine**         | Resolves row-level conflicts automatically                                  | `crdt-rs`, `automerge-rs` |  
-| **Branch Manager**      | Git-like refs for isolated workspaces                                       | `gitoxide`                |  
-| **Query Processor**     | Time-travel SQL with historical state reconstruction                        | `sqlparser-rs`, `polars`  |  
-| **Merge Engine**        | Three-way schema merging + CRDT data resolution                             | `similar` (diffs)         |  
+| Component               | Description                                                                 | Implementation           |  
+|-------------------------|-----------------------------------------------------------------------------|--------------------------|  
+| **Storage Engine**      | Key-value storage with versioned data                                       | `rocksdb`                |  
+| **Commit System**       | Immutable commits with BLAKE3 hashing                                       | `blake3`, `bincode`      |  
+| **CRDT Engine**         | Resolves row-level conflicts automatically                                  | Custom implementation    |  
+| **Branch Manager**      | Branch references                                                           | `rocksdb`                |  
+| **Query Interface**     | SQL-like queries                                                            | `sqlparser`              |  
+| **Data Import**         | CSV input with version tracking                                             | `csv` crate              |  
 
-### **Roadmap**  
-#### **Checkpoint 1: Core Versioning & Branching**  
-- Append-only commit storage (`sled` + `blake3`)
-- Row-level versioning with CRDTs (`crdt-rs`)  
-- Basic branch creation/deletion (`gitoxide` integration)
-- CLI interface for commits/branches (`clap`)  
+### **Current Functionality**
+#### **Version Control Features**
+- Create, view, and revert commits
+- Branch creation and switching
+- Cryptographic commit hashes
+- Time-travel data access
 
-#### **Checkpoint 2: Merging & Query Interface**  
-- Three-way schema merging (`similar` for diffing)  
-- CRDT-based row conflict resolution  
-- SQL time-travel parser (`sqlparser-rs`)  
-- Historical state reconstruction (`polars` for query execution) 
+#### **Data Operations**
+- Table creation via SQL
+- Row-level inserts/updates/deletes
+- CSV data import
+- Versioned data queries
+- Commit diffs and comparisons
+
+#### **Conflict Resolution**
+- Last-writer-wins register CRDTs
+- Max-value counter CRDTs
+- Automatic merge conflict resolution
+- Schema change tracking
 
 ---
 
-## **Possible Challenges**  
-1. **Merge Complexity**: Combining CRDTs with schema changes may cause issues and require different logic.  
-2. **Storage Overhead**: Versioning every row could bloat storage.  
-3. **Query Performance**: Reconstructing historical states may be slow. 
+#### **Future Enhancements**
+- Three-way merge capabilities
+- Advanced query optimization
+- Performance benchmarking
+- Web-based visualization interface
