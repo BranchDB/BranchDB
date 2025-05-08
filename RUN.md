@@ -9,7 +9,7 @@
    `cargo build --release`  
 
 3. **Initialize the database**  
-   `cargo run -- init`  
+   `cargo run -- init [DATABASE NAME]`  
 
 ## Basic Usage
 `cargo run -- [COMMAND] [ARGUMENTS]`  
@@ -45,13 +45,13 @@
    `cargo run -- init`  
 
 2. **Create table**  
-   `cargo run -- sql "CREATE TABLE users (id TEXT, name TEXT)"`  
+   `cargo run -- sql "CREATE TABLE [DATATBASE NAME] (id TEXT, name TEXT)"`  
 
 3. **Import data**  
-   `cargo run -- import users.csv users`  
+   `cargo run -- import [CSV NAME].csv [CSV NAME]`  
 
 4. **Commit changes**  
-   `cargo run -- commit -m "Initial user data import"`  
+   `cargo run -- commit -m "[INSERT COMMIT MESSAGE]"`  
 
 5. **Create branch**  
    `cargo run -- branch new-feature`  
