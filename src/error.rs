@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::SystemTimeError;
 
 #[derive(Debug)]
 pub enum GitDBError {
@@ -10,7 +11,8 @@ pub enum GitDBError {
     CsvError(csv::Error),
     HexError(hex::FromHexError),
     IoError(String),
-    JsonError(serde_json::Error),  
+    JsonError(serde_json::Error),
+    CorruptData(String),
 }
 
 pub type Result<T> = std::result::Result<T, GitDBError>;
@@ -26,7 +28,8 @@ impl fmt::Display for GitDBError {
             GitDBError::CsvError(e) => write!(f, "CSV error: {}", e),
             GitDBError::HexError(e) => write!(f, "Hex conversion error: {}", e),
             GitDBError::IoError(s) => write!(f, "IO error: {}", s),
-            GitDBError::JsonError(e) => write!(f, "JSON error: {}", e),  // Added this match arm
+            GitDBError::JsonError(e) => write!(f, "JSON error: {}", e),
+            GitDBError::CorruptData(s) => write!(f, "Data corruption detected: {}", s),
         }
     }
 }
@@ -63,6 +66,12 @@ impl From<std::io::Error> for GitDBError {
 
 impl From<serde_json::Error> for GitDBError {
     fn from(err: serde_json::Error) -> GitDBError {
-        GitDBError::JsonError(err)  // Added this implementation
+        GitDBError::JsonError(err)  
+    }
+}
+
+impl From<SystemTimeError> for GitDBError {
+    fn from(err: SystemTimeError) -> GitDBError {
+        GitDBError::IoError(err.to_string())
     }
 }

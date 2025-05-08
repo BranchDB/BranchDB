@@ -24,6 +24,7 @@ fn run() -> Result<(), GitDBError> {
     let branch_mgr = BranchManager::new(storage.db.clone());
 
     match args {
+        Commands::Init { path } => commands::handle_init(&path),
         Commands::Commit { message } => commands::handle_commit(&storage, &message),
         Commands::Branch { name, delete } => commands::handle_branch(&branch_mgr, &name, delete),
         Commands::Query { sql } => commands::handle_query(&sql, &storage.db),
@@ -32,6 +33,11 @@ fn run() -> Result<(), GitDBError> {
         Commands::ShowTable { table_name, commit_hash } => {
             commands::handle_show_table(&*storage.db, &table_name, commit_hash.as_deref())
         }
+        Commands::Checkout { target } => commands::handle_checkout(&storage, &target),
+        Commands::Log { verbose } => commands::handle_log(&storage, verbose),
+        Commands::Revert { commit_hash } => commands::handle_revert(&storage, &commit_hash),
+        Commands::Diff { from, to } => commands::handle_diff(&storage, &from, &to),
+        Commands::History { limit } => commands::handle_history(&storage, limit),
     }
 }
 

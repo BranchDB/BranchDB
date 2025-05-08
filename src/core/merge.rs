@@ -19,6 +19,7 @@ pub fn merge_states(state1: &mut CrdtEngine, state2: &CrdtEngine) -> Result<Vec<
                             value: bincode::serialize(value)?,
                         });
                     }
+                    // else: unchanged, skip
                 }
                 None => {
                     local_rows.insert(id.clone(), value.clone());
