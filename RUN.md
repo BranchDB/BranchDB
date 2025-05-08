@@ -2,8 +2,8 @@
 
 ### Step-by-Step Setup
 1. **Clone the repository**  
-   `git clone https://github.com/[your-username]/gitdb.git`  
-   `cd gitdb`  
+   `git clone https://github.com/AvniKanodia/rust-final-project`  
+   `cd rust-final-project`  
 
 2. **Build the project**  
    `cargo build --release`  
