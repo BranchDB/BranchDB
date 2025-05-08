@@ -1,12 +1,5 @@
 # GitDB - Version Controlled Database System
 
-## Installation and Setup
-
-### Prerequisites
-- **Rust toolchain** (latest stable version)  
-- **Cargo package manager** (comes with Rust)  
-- **Git** (for cloning the repository)  
-
 ### Step-by-Step Setup
 1. **Clone the repository**  
    `git clone https://github.com/[your-username]/gitdb.git`  
