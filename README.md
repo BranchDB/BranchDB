@@ -1,7 +1,5 @@
 # BranchDB: A Git-Inspired Version-Controlled Database
 
----
-
 ## **Project Introduction**  
 ### What is BranchDB?
 BranchDB is a **Rust-native database system** that brings Git's powerful version control capabilities to structured data management. It treats every database transaction as an immutable commit, enabling:
