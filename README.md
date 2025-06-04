@@ -1,28 +1,22 @@
-# GitDB: A Git-Inspired Version-Controlled Database
-**Group Name**:
-- Version Controllers
-
-**Members**:
-- Avni Kanodia (`avnik2`)  
-- Dibyadeep Saha (`saha18`)
+# BranchDB: A Git-Inspired Version-Controlled Database
 
 ---
 
 ## **Project Introduction**  
-### What is GitDB?
-GitDB is a **Rust-native database system** that brings Git's powerful version control capabilities to structured data management. It treats every database transaction as an immutable commit, enabling:
+### What is BranchDB?
+BranchDB is a **Rust-native database system** that brings Git's powerful version control capabilities to structured data management. It treats every database transaction as an immutable commit, enabling:
 
 - **Full historical tracking** of all data changes
 - **Branching and merging** workflows for database content
 - **Automatic conflict resolution** using CRDTs
 - **Time-travel queries** to inspect past states
 
-### Why GitDB Matters
+### Why BranchDB Matters
 Traditional databases force users to choose between:
 1. Overwriting data (losing history)
 2. Building complex audit systems (high maintenance)
 
-GitDB provides **built-in version control** with familiar Git semantics, solving:
+BranchDB provides **built-in version control** with familiar Git semantics, solving:
 - **Data recovery** from accidental deletions
 - **Team collaboration** through isolated branches
 - **Debugging** with precise change tracking
