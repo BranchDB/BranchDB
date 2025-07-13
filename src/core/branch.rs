@@ -2,6 +2,7 @@ use crate::error::{GitDBError, Result};
 use rocksdb::DB;
 use std::sync::Arc;
 
+// BranchManager handles creation and deletion of branches in the BranchDB database. Each branch points to a commit hash.
 pub struct BranchManager {
     pub db: Arc<DB>,
 }
@@ -12,22 +13,21 @@ impl BranchManager {
     }
 
     pub fn create_branch(&self, name: &str) -> Result<()> {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
+        if name.trim().is_empty() {
             return Err(GitDBError::InvalidInput("Branch name cannot be empty".into()));
         }
 
-        let branch_key = format!("branch:{}", trimmed);
+        let branch_key = format!("branch:{}", name);
         if self.db.get(branch_key.as_bytes())?.is_some() {
-            return Err(GitDBError::InvalidInput(format!("Branch '{}' already exists", trimmed)));
+            return Err(GitDBError::InvalidInput(format!("Branch '{}' already exists", name)));
         }
 
         let head = self.db.get(b"HEAD")?.ok_or_else(|| {
-            GitDBError::InvalidInput(format!("Cannot create branch '{}'", trimmed))
+            GitDBError::InvalidInput(format!("Cannot create branch '{}': HEAD not found", name))
         })?;
 
         self.db.put(branch_key.as_bytes(), head)?;
-        println!("Created new branch '{}" , trimmed);
+        println!("Created new branch '{}" , name);
         Ok(())
     }
 

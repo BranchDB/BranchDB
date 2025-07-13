@@ -81,7 +81,8 @@ pub enum Commands {
         #[arg(help = "Commit hash or branch name")]
         target: String,
     },
-    
+
+    /// Show commit history
     Log {
         #[arg(short, long, help = "Show full details")]
         verbose: bool,
