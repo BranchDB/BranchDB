@@ -166,6 +166,23 @@ pub fn handle_sql(storage: &CommitStorage, command: &str) -> Result<()> {
             return Err(BranchDBError::InvalidInput("No values provided".into()));
         }
         
+        // Dynamic type checking - works with any schema format
+        if let Ok(schema) = storage.get_table_schema(table, None) {
+            if let Some(columns) = schema.get("columns") {
+                // Match values to columns by position when column names aren't specified
+                for (i, field) in values.iter().enumerate() {
+                    if let Some((_, col_type)) = columns.as_object()
+                        .and_then(|cols| cols.iter().nth(i))
+                    {
+                        validate_value_type(
+                            field,
+                            col_type.as_str().unwrap_or("TEXT")
+                        )?;
+                    }
+                }
+            }
+        }
+
         let json_value = serde_json::to_string(&values)?;  
         
         let changes = vec![Change::Insert {
@@ -177,7 +194,7 @@ pub fn handle_sql(storage: &CommitStorage, command: &str) -> Result<()> {
         storage.create_commit(&format!("SQL: {}", command), changes)?;
         Ok(())
     }
-    // Modified for proper SQL UPDATE command handling
+    
     else if cmd_upper.starts_with("UPDATE") {
         let table = command.split_whitespace()
             .nth(1)
@@ -191,57 +208,82 @@ pub fn handle_sql(storage: &CommitStorage, command: &str) -> Result<()> {
         let set_clause = &command[set_idx+3..where_idx].trim();
         let where_clause = &command[where_idx+5..].trim();
 
-        let id = where_clause.split("=")
-            .nth(1)
-            .ok_or_else(|| BranchDBError::InvalidInput("Invalid WHERE clause".into()))?
-            .trim()
-            .trim_matches('\'');
-
-        // Create binary key without UTF-8 conversion
-        let key = id.as_bytes().to_vec();
+        // Robust WHERE clause parsing
+        let id = if where_clause.contains("=") {
+            let parts: Vec<&str> = where_clause.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(BranchDBError::InvalidInput("Invalid WHERE clause format".into()));
+            }
+            parts[1].trim().trim_matches('\'')
+        } else {
+            return Err(BranchDBError::InvalidInput("WHERE clause must contain = operator".into()));
+        };
 
         // Get current value
-        let current_value = match storage.db.get(&key)? {
+        let key = format!("{}:{}", table, id);
+        let current_value = match storage.db.get(key.as_bytes())? {
             Some(existing) => {
-                let mut current: serde_json::Value = match bincode::deserialize::<CrdtValue>(&existing)? {
-                    CrdtValue::Register(data) => serde_json::from_slice(&data)?,
-                    _ => return Err(BranchDBError::TypeMismatch("Expected Register type".into()))
-                };
-                
-                // Apply updates
-                for pair in set_clause.split(',') {
-                    let mut parts = pair.split('=');
-                    let field = parts.next()
-                        .ok_or(BranchDBError::InvalidInput("Invalid SET clause".into()))?
-                        .trim();
-                    let value = parts.next()
-                        .ok_or(BranchDBError::InvalidInput("Invalid SET clause".into()))?
-                        .trim()
-                        .trim_matches('\'');
-                    current[field] = value.into();
-                }
-                current
-            }
-            None => {
-                // Enhanced error reporting with hex-encoded keys
-                let mut keys = Vec::new();
-                let prefix = vec![];
-
-                let iter = storage.db.prefix_iterator(&prefix);
-                for item in iter {
-                    let (raw_key, _) = item?;
-                    let key_str = String::from_utf8_lossy(&raw_key);
-                    if key_str == "!schema" {
-                        continue; // Skip schema entry
+                let crdt_value: CrdtValue = bincode::deserialize(&existing)?;
+                match crdt_value {
+                    CrdtValue::Register(data) => {
+                        // Parse as JSON value
+                        let mut current: serde_json::Value = serde_json::from_slice(&data)?;
+                        
+                        // Handle array format
+                        if let serde_json::Value::Array(ref mut arr) = current {
+                            // Get schema to determine field positions
+                            let schema = storage.get_table_schema(table, None)?;
+                            let columns = schema.get("columns")
+                                .and_then(|c| c.as_object())
+                                .ok_or_else(|| BranchDBError::InvalidInput("Invalid schema format".into()))?;
+                            
+                            // Process each SET clause
+                            for pair in set_clause.split(',') {
+                                let mut parts = pair.split('=').map(|s| s.trim());
+                                let field = parts.next()
+                                    .ok_or_else(|| BranchDBError::InvalidInput("Invalid SET clause".into()))?;
+                                let value = parts.next()
+                                    .ok_or_else(|| BranchDBError::InvalidInput("Invalid SET clause".into()))?
+                                    .trim_matches('\'');
+                                
+                                // Find field position in schema
+                                if let Some((pos, _)) = columns.iter().enumerate().find(|(_, (name, _))| name.as_str() == field) {
+                                    if pos < arr.len() {
+                                        // Type checking
+                                        if let Some(existing_val) = arr.get(pos) {
+                                            match existing_val {
+                                                serde_json::Value::Number(_) => {
+                                                    arr[pos] = value.parse::<f64>()
+                                                        .map(serde_json::Value::from)
+                                                        .map_err(|_| BranchDBError::TypeMismatch(
+                                                            format!("Expected number for field {}", field)
+                                                        ))?;
+                                                }
+                                                _ => arr[pos] = value.into(),
+                                            }
+                                        } else {
+                                            arr.push(value.into());
+                                        }
+                                    } else {
+                                        return Err(BranchDBError::InvalidInput(
+                                            format!("Field position {} out of bounds", pos)
+                                        ));
+                                    }
+                                } else {
+                                    return Err(BranchDBError::InvalidInput(
+                                        format!("Field '{}' not found in schema", field)
+                                    ));
+                                }
+                            }
+                        }
+                        current
                     }
-                    keys.push(key_str.into_owned());
+                    _ => return Err(BranchDBError::TypeMismatch("Expected Register type".into())),
                 }
-                
-                return Err(BranchDBError::InvalidInput(
-                    format!("Row '{}' not found in table '{}'. Existing keys (hex): {:?}", 
-                        id, table, keys)
-                ));
             }
+            None => return Err(BranchDBError::InvalidInput(
+                format!("Row '{}' not found in table '{}'", id, table)
+            )),
         };
 
         // Create and commit changes
@@ -253,6 +295,53 @@ pub fn handle_sql(storage: &CommitStorage, command: &str) -> Result<()> {
             ))?,
         }];
         
+        storage.create_commit(&format!("SQL: {}", command), changes)?;
+        Ok(())
+    }
+
+    // NEW COMMAND SUPPORT: ALTER TABLE
+    else if cmd_upper.starts_with("ALTER TABLE") {
+        let table = command.split_whitespace()
+            .nth(2)
+            .ok_or_else(|| BranchDBError::InvalidInput("Missing table name".into()))?;
+
+        // Get current schema
+        let schema_key = format!("{}:!schema", table);
+        let mut schema: serde_json::Value = match storage.db.get(schema_key.as_bytes())? {
+            Some(data) => serde_json::from_slice(&data)?,
+            None => serde_json::json!({}),
+        };
+
+        // Parse ALTER command
+        if cmd_upper.contains("ADD COLUMN") {
+            let column_name = command.split_whitespace()
+                .nth(4)
+                .ok_or_else(|| BranchDBError::InvalidInput("Missing column name".into()))?;
+            let column_type = command.split_whitespace()
+                .nth(5)
+                .ok_or_else(|| BranchDBError::InvalidInput("Missing column type".into()))?;
+
+            schema["columns"][column_name] = serde_json::Value::String(column_type.to_string());
+        } else if cmd_upper.contains("DROP COLUMN") {
+            let column_name = command.split_whitespace()
+                .nth(4)
+                .ok_or_else(|| BranchDBError::InvalidInput("Missing column name".into()))?;
+            schema["columns"].as_object_mut()
+                .ok_or(BranchDBError::TypeMismatch("Invalid schema format".into()))?
+                .remove(column_name);
+        } else {
+            return Err(BranchDBError::InvalidInput("Unsupported ALTER TABLE operation".into()));
+        }
+
+        // Update schema
+        let changes = vec![Change::Update {
+            table: table.to_string(),
+            id: "!schema".to_string(),
+            value: bincode::serialize(&CrdtValue::Register(
+                serde_json::to_vec(&schema)?
+            ))?,
+        }];
+
         storage.create_commit(&format!("SQL: {}", command), changes)?;
         Ok(())
     }
@@ -299,11 +388,13 @@ fn parse_sql_values(values_part: &str) -> Result<Vec<String>> {
 }
 
 pub fn handle_import_csv(storage: &CommitStorage, file: &str, table: &str) -> Result<()> {
+    const BATCH_SIZE: usize = 100;
+    
     let mut rdr = csv::Reader::from_path(file)?;
     let headers = rdr.headers()?.clone();
     let mut changes = Vec::new();
-
-    for result in rdr.records() {
+    
+    for (i, result) in rdr.records().enumerate() {
         let record = result?;
         let id = record.get(0)
             .ok_or_else(|| BranchDBError::InvalidInput("CSV missing ID column".into()))?;
@@ -313,16 +404,78 @@ pub fn handle_import_csv(storage: &CommitStorage, file: &str, table: &str) -> Re
             row.push(format!("\"{}\":\"{}\"", headers.get(i).unwrap_or(&i.to_string()), field));
         }
         
-        changes.push(Change::Insert {
+        let change = Change::Insert {
             table: table.to_string(),
             id: id.to_string(),
             value: bincode::serialize(&CrdtValue::Register(
                 format!("{{{}}}", row.join(",")).as_bytes().to_vec()
             ))?,
-        });
+        };
+        
+        changes.push(change);
+
+        // Batch processing
+        if i % BATCH_SIZE == 0 && i > 0 {
+            storage.create_commit(&format!("Batch import {} into {}", file, table), changes)?;
+            changes = Vec::new();
+        }
     }
 
-    storage.create_commit(&format!("Import {} into {}", file, table), changes)?;
+    // Final commit for remaining changes
+    if !changes.is_empty() {
+        storage.create_commit(&format!("Import {} into {}", file, table), changes)?;
+    }
+    
+    Ok(())
+}
+
+pub fn handle_export_csv(db: &DB, table: &str, file_path: &str) -> Result<()> {
+    let mut wtr = csv::Writer::from_path(file_path)?;
+    
+    // Get schema
+    let schema_key = format!("{}:!schema", table);
+    let schema: serde_json::Value = match db.get(schema_key.as_bytes())? {
+        Some(data) => serde_json::from_slice(&data)?,
+        None => serde_json::json!({}),
+    };
+
+    // Write headers
+    if let Some(columns) = schema.get("columns") {
+        let headers: Vec<_> = columns.as_object()
+            .ok_or(BranchDBError::TypeMismatch("Invalid schema format".into()))?
+            .keys()
+            .collect();
+        wtr.write_record(headers)?;
+    }
+
+    // Write data
+    let prefix = format!("{}:", table);
+    let iter = db.prefix_iterator(prefix.as_bytes());
+    for item in iter {
+        let (key, value) = item?;
+        let id = String::from_utf8_lossy(&key[prefix.len()..]);
+        
+        if id == "!schema" {
+            continue;
+        }
+
+        let crdt_value: CrdtValue = bincode::deserialize(&value)?;
+        if let CrdtValue::Register(data) = crdt_value {
+            let row: serde_json::Value = serde_json::from_slice(&data)?;
+            
+            let mut record = Vec::new();
+            if let Some(columns) = schema.get("columns") {
+                for column in columns.as_object().unwrap().keys() {
+                    let value = row.get(column).unwrap_or(&serde_json::Value::Null);
+                    record.push(value.to_string().trim_matches('"').to_string());
+                }
+            }
+            
+            wtr.write_record(&record)?;
+        }
+    }
+
+    wtr.flush()?;
     Ok(())
 }
 
@@ -519,19 +672,35 @@ pub fn handle_checkout(storage: &CommitStorage, target: &str) -> Result<()> {
     // Try as branch first
     let branch_key = format!("branch:{}", target);
     if let Some(branch_head) = storage.db.get(branch_key.as_bytes())? {
+        // Verify the branch head exists
+        if storage.db.get(&branch_head)?.is_none() {
+            return Err(BranchDBError::InvalidInput(
+                format!("Branch '{}' points to invalid commit", target)
+            ));
+        }
+        
         storage.db.put(b"HEAD", &branch_head)?;
         println!("Switched to branch '{}'", target);
         return Ok(());
     }
 
     // Try as commit hash
-    if target.len() == 64 { // Basic hex hash check
-        if let Ok(hash_bytes) = hex::decode(target) {
-            if storage.db.get(&hash_bytes)?.is_some() {
-                storage.db.put(b"HEAD", &hash_bytes)?;
-                println!("Switched to commit {}", target);
-                return Ok(());
-            }
+    if target.len() == 64 {
+        let hash_bytes = hex::decode(target)?;
+        if hash_bytes.len() != 32 {
+            return Err(BranchDBError::InvalidInput(
+                "Commit hash must be 32 bytes".into()
+            ));
+        }
+        
+        // Create array copy without consuming hash_bytes
+        let mut hash_array = [0u8; 32];
+        hash_array.copy_from_slice(&hash_bytes);
+        
+        if storage.db.get(&hash_array)?.is_some() {
+            storage.db.put(b"HEAD", &hash_bytes)?;
+            println!("Switched to commit {}", target);
+            return Ok(());
         }
     }
 
@@ -640,5 +809,25 @@ pub fn handle_merge(storage: &CommitStorage, branch_name: &str) -> Result<()> {
     )?;
     
     println!("Created merge commit: {}", hex::encode(hash));
+    Ok(())
+}
+
+fn validate_value_type(value: &str, expected_type: &str) -> Result<()> {
+    match expected_type.to_uppercase().as_str() {
+        "INTEGER" | "INT" => {
+            value.parse::<i64>()
+                .map_err(|_| BranchDBError::TypeMismatch(format!("Expected integer, got {}", value)))?;
+        },
+        "FLOAT" | "REAL" => {
+            value.parse::<f64>()
+                .map_err(|_| BranchDBError::TypeMismatch(format!("Expected float, got {}", value)))?;
+        },
+        "BOOLEAN" | "BOOL" => {
+            if !value.eq_ignore_ascii_case("true") && !value.eq_ignore_ascii_case("false") {
+                return Err(BranchDBError::TypeMismatch(format!("Expected boolean, got {}", value)));
+            }
+        },
+        _ => {} // No validation for TEXT/STRING
+    }
     Ok(())
 }
