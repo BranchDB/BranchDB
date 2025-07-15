@@ -2,18 +2,18 @@ use clap::Parser;
 use gitdb::cli::commands::{self, CommandsWrapper, Commands};
 use gitdb::core::database::CommitStorage;
 use gitdb::core::branch::BranchManager;
-use gitdb::error::GitDBError;
+use gitdb::error::BranchDBError;
 use std::fs;
 use std::path::Path;
 
-fn ensure_data_dir() -> Result<(), GitDBError> {
+fn ensure_data_dir() -> Result<(), BranchDBError> {
     if !Path::new("./data").exists() {
-        fs::create_dir("./data").map_err(|e| GitDBError::InvalidInput(format!("Failed to create data dir: {}", e)))?;
+        fs::create_dir("./data").map_err(|e| BranchDBError::InvalidInput(format!("Failed to create data dir: {}", e)))?;
     }
     Ok(())
 }
 
-fn run() -> Result<(), GitDBError> {
+fn run() -> Result<(), BranchDBError> {
     ensure_data_dir()?;
     let args = CommandsWrapper::parse().command;
     
@@ -38,6 +38,8 @@ fn run() -> Result<(), GitDBError> {
         Commands::Revert { commit_hash } => commands::handle_revert(&storage, &commit_hash),
         Commands::Diff { from, to } => commands::handle_diff(&storage, &from, &to),
         Commands::History { limit } => commands::handle_history(&storage, limit),
+        Commands::BranchList { verbose } => commands::handle_branch_list(&branch_mgr, verbose),
+        Commands::Merge { branch } => commands::handle_merge(&storage, &branch),
     }
 }
 

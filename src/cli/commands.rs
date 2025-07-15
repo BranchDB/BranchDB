@@ -1,13 +1,14 @@
 use clap::{Parser, Subcommand};
 use crate::core::database::CommitStorage;
 use crate::core::branch::BranchManager;
+use crate::core::merge::merge_states;
 use crate::core::query::QueryProcessor;
-use crate::error::{GitDBError, Result};
+use crate::error::{BranchDBError, Result};
 use rocksdb::DB;
 use hex;
 use csv;
 use crate::core::models::Change;
-use crate::core::crdt::CrdtValue;
+use crate::core::crdt::{CrdtEngine, CrdtValue};
 use std::path::Path;
 use std::fs;
 use std::collections::HashSet;
@@ -55,7 +56,7 @@ pub enum Commands {
         #[arg(help = "Table name to display")]
         table_name: String,
         
-        #[arg(help = "Commit hash to view at (defaults to HEAD)")]
+        #[arg(long, help = "Commit hash to view at")]
         commit_hash: Option<String>,
     },
     Revert {
@@ -81,17 +82,35 @@ pub enum Commands {
         #[arg(help = "Commit hash or branch name")]
         target: String,
     },
-
-    /// Show commit history
+    // Show commit history
     Log {
         #[arg(short, long, help = "Show full details")]
         verbose: bool,
+    },
+    // Show list of branches
+    /* 
+    The command can now be used like:
+
+    cargo run -- branch-list
+
+    or with verbose output:
+
+    cargo run -- branch-list --verbose
+    */
+    BranchList {
+        #[arg(short, long, help = "Show additional branch information")]
+        verbose: bool,
+    },
+    // Merge branches
+    Merge {
+        #[arg(help = "Branch name to merge")]
+        branch: String,
     },
 }
 
 pub fn handle_commit(storage: &CommitStorage, message: &str) -> Result<()> {
     if message.trim().is_empty() {
-        return Err(GitDBError::InvalidInput("Commit message cannot be empty.".into()));
+        return Err(BranchDBError::InvalidInput("Commit message cannot be empty.".into()));
     }
 
     let changes = Vec::new();
@@ -122,7 +141,7 @@ pub fn handle_sql(storage: &CommitStorage, command: &str) -> Result<()> {
     if cmd_upper.starts_with("CREATE TABLE") {
         let table_name = command.split_whitespace()
             .nth(2)
-            .ok_or_else(|| GitDBError::InvalidInput("Missing table name".into()))?;
+            .ok_or_else(|| BranchDBError::InvalidInput("Missing table name".into()))?;
         
         let changes = vec![Change::Insert {
             table: table_name.to_string(),
@@ -136,15 +155,15 @@ pub fn handle_sql(storage: &CommitStorage, command: &str) -> Result<()> {
     else if cmd_upper.starts_with("INSERT INTO") {
         let table = command.split_whitespace()
             .nth(2)
-            .ok_or_else(|| GitDBError::InvalidInput("Missing table name".into()))?;
+            .ok_or_else(|| BranchDBError::InvalidInput("Missing table name".into()))?;
         
         let values_start = command.find("VALUES")
-            .ok_or_else(|| GitDBError::InvalidInput("Missing VALUES clause".into()))? + 6;
+            .ok_or_else(|| BranchDBError::InvalidInput("Missing VALUES clause".into()))? + 6;
         let values_part = &command[values_start..].trim();
         
         let values = parse_sql_values(values_part)?;
         if values.is_empty() {
-            return Err(GitDBError::InvalidInput("No values provided".into()));
+            return Err(BranchDBError::InvalidInput("No values provided".into()));
         }
         
         let json_value = serde_json::to_string(&values)?;  
@@ -158,48 +177,87 @@ pub fn handle_sql(storage: &CommitStorage, command: &str) -> Result<()> {
         storage.create_commit(&format!("SQL: {}", command), changes)?;
         Ok(())
     }
+    // Modified for proper SQL UPDATE command handling
     else if cmd_upper.starts_with("UPDATE") {
         let table = command.split_whitespace()
             .nth(1)
-            .ok_or_else(|| GitDBError::InvalidInput("Missing table name".into()))?;
+            .ok_or_else(|| BranchDBError::InvalidInput("Missing table name".into()))?;
 
         let set_idx = command.find("SET")
-            .ok_or_else(|| GitDBError::InvalidInput("Missing SET clause".into()))?;
+            .ok_or_else(|| BranchDBError::InvalidInput("Missing SET clause".into()))?;
         let where_idx = command.find("WHERE")
-            .ok_or_else(|| GitDBError::InvalidInput("Missing WHERE clause".into()))?;
+            .ok_or_else(|| BranchDBError::InvalidInput("Missing WHERE clause".into()))?;
 
         let set_clause = &command[set_idx+3..where_idx].trim();
         let where_clause = &command[where_idx+5..].trim();
 
         let id = where_clause.split("=")
             .nth(1)
-            .ok_or_else(|| GitDBError::InvalidInput("Invalid WHERE clause".into()))?
+            .ok_or_else(|| BranchDBError::InvalidInput("Invalid WHERE clause".into()))?
             .trim()
             .trim_matches('\'');
 
-        let updates: Vec<(&str, &str)> = set_clause.split(',')
-            .filter_map(|pair| {
-                let mut parts = pair.split('=');
-                Some((
-                    parts.next()?.trim(),
-                    parts.next()?.trim().trim_matches('\'')
-                ))
-            })
-            .collect();
+        // Create binary key without UTF-8 conversion
+        let key = id.as_bytes().to_vec();
 
-        let json_value = serde_json::to_string(&updates)?;
-        
+        // Get current value
+        let current_value = match storage.db.get(&key)? {
+            Some(existing) => {
+                let mut current: serde_json::Value = match bincode::deserialize::<CrdtValue>(&existing)? {
+                    CrdtValue::Register(data) => serde_json::from_slice(&data)?,
+                    _ => return Err(BranchDBError::TypeMismatch("Expected Register type".into()))
+                };
+                
+                // Apply updates
+                for pair in set_clause.split(',') {
+                    let mut parts = pair.split('=');
+                    let field = parts.next()
+                        .ok_or(BranchDBError::InvalidInput("Invalid SET clause".into()))?
+                        .trim();
+                    let value = parts.next()
+                        .ok_or(BranchDBError::InvalidInput("Invalid SET clause".into()))?
+                        .trim()
+                        .trim_matches('\'');
+                    current[field] = value.into();
+                }
+                current
+            }
+            None => {
+                // Enhanced error reporting with hex-encoded keys
+                let mut keys = Vec::new();
+                let prefix = vec![];
+
+                let iter = storage.db.prefix_iterator(&prefix);
+                for item in iter {
+                    let (raw_key, _) = item?;
+                    let key_str = String::from_utf8_lossy(&raw_key);
+                    if key_str == "!schema" {
+                        continue; // Skip schema entry
+                    }
+                    keys.push(key_str.into_owned());
+                }
+                
+                return Err(BranchDBError::InvalidInput(
+                    format!("Row '{}' not found in table '{}'. Existing keys (hex): {:?}", 
+                        id, table, keys)
+                ));
+            }
+        };
+
+        // Create and commit changes
         let changes = vec![Change::Update {
             table: table.to_string(),
             id: id.to_string(),
-            value: bincode::serialize(&CrdtValue::Register(json_value.as_bytes().to_vec()))?,
+            value: bincode::serialize(&CrdtValue::Register(
+                serde_json::to_vec(&current_value)?
+            ))?,
         }];
         
         storage.create_commit(&format!("SQL: {}", command), changes)?;
         Ok(())
     }
     else {
-        Err(GitDBError::InvalidInput("Unsupported SQL command".into()))
+        Err(BranchDBError::InvalidInput("Unsupported SQL command".into()))
     }
 }
 
@@ -248,7 +306,7 @@ pub fn handle_import_csv(storage: &CommitStorage, file: &str, table: &str) -> Re
     for result in rdr.records() {
         let record = result?;
         let id = record.get(0)
-            .ok_or_else(|| GitDBError::InvalidInput("CSV missing ID column".into()))?;
+            .ok_or_else(|| BranchDBError::InvalidInput("CSV missing ID column".into()))?;
         
         let mut row = Vec::new();
         for (i, field) in record.iter().enumerate() {
@@ -279,6 +337,12 @@ pub fn handle_show_table(db: &DB, table_name: &str, commit_hash: Option<&str>) -
     
     match processor.get_table_at_commit(table_name, &hash) {
         Ok(rows) => {
+            // First print schema if it exists
+            if let Some(CrdtValue::Register(schema_data)) = rows.get("!schema") {
+                println!("Schema: {}", String::from_utf8_lossy(schema_data));
+            }
+
+            // Then print other rows
             for (id, value) in rows {
                 if id == "!schema" {
                     continue;
@@ -314,53 +378,72 @@ pub fn handle_show_table(db: &DB, table_name: &str, commit_hash: Option<&str>) -
 pub fn handle_revert(storage: &CommitStorage, commit_hash: &str) -> Result<()> {
     // Validate commit hash format
     if commit_hash.len() != 64 {
-        return Err(GitDBError::InvalidInput(
+        return Err(BranchDBError::InvalidInput(
             "Commit hash must be 64 characters long".into()
         ));
     }
     
     let hash_bytes = hex::decode(commit_hash)?;
     let hash_array: [u8; 32] = hash_bytes.try_into()
-        .map_err(|_| GitDBError::InvalidInput("Invalid commit hash".into()))?;
+        .map_err(|_| BranchDBError::InvalidInput("Invalid commit hash".into()))?;
     
-    // Verify the commit exists
-    storage.get_commit_by_hash(&hash_array)?;
+    // Verify the commit exists and show info
+    let target_commit = storage.get_commit_by_hash(&hash_array)?;
+    println!("Reverting to commit: {}", commit_hash);
+    println!("Original commit message: {}", target_commit.message);
+    println!("Date: {}", target_commit.timestamp);
     
-    // Get and print current state before revert
-    println!("\nState before revert:");
+    // Get current state before revert
+    println!("\nCurrent state:");
     let before_state: Vec<_> = storage.db.iterator(rocksdb::IteratorMode::Start)
         .filter_map(|item| item.ok())
         .collect();
     
+    // Filter and display only relevant table data (skip internal metadata)
     for (key, value) in &before_state {
-        println!("{}: {}", String::from_utf8_lossy(key), String::from_utf8_lossy(value));
+        let key_str = String::from_utf8_lossy(key);
+        if !key_str.starts_with("_internal") {  // Skip internal metadata
+            println!("{}: {}", key_str, String::from_utf8_lossy(value));
+        }
     }
     
+    // Perform the revert
     storage.revert_to_commit(&hash_array)?;
     
-    // Verify the revert worked
+    // Verify and show new state
     let current_head = storage.get_head()?
-        .ok_or(GitDBError::InvalidInput("No HEAD commit".into()))?;
+        .ok_or(BranchDBError::InvalidInput("No HEAD commit".into()))?;
     let current_commit = storage.get_commit_by_hash(&current_head)?;
     
     println!("\nSuccessfully reverted to commit {}", commit_hash);
-    println!("Current HEAD: {}", hex::encode(current_head));
-    println!("Commit message: {}", current_commit.message);
+    println!("New HEAD: {}", hex::encode(current_head));
+    println!("New commit message: {}", current_commit.message);
     
-    // Print state after revert
+    // Get state after revert
     println!("\nState after revert:");
     let after_state: Vec<_> = storage.db.iterator(rocksdb::IteratorMode::Start)
         .filter_map(|item| item.ok())
         .collect();
     
+    // Filter and display only relevant table data
     for (key, value) in &after_state {
-        println!("{}: {}", String::from_utf8_lossy(key), String::from_utf8_lossy(value));
+        let key_str = String::from_utf8_lossy(key);
+        if !key_str.starts_with("_internal") {
+            println!("{}: {}", key_str, String::from_utf8_lossy(value));
+        }
     }
     
-    // Compare states
+    // Compare states (only for user-visible data)
     println!("\nChanges:");
-    let before_keys: HashSet<_> = before_state.iter().map(|(k, _)| k).collect();
-    let after_keys: HashSet<_> = after_state.iter().map(|(k, _)| k).collect();
+    let before_keys: HashSet<_> = before_state.iter()
+        .filter(|(k, _)| !String::from_utf8_lossy(k).starts_with("_internal"))
+        .map(|(k, _)| k)
+        .collect();
+        
+    let after_keys: HashSet<_> = after_state.iter()
+        .filter(|(k, _)| !String::from_utf8_lossy(k).starts_with("_internal"))
+        .map(|(k, _)| k)
+        .collect();
     
     // Added entries
     for key in after_keys.difference(&before_keys) {
@@ -374,9 +457,12 @@ pub fn handle_revert(storage: &CommitStorage, commit_hash: &str) -> Result<()> {
     
     // Changed entries
     for (key, after_value) in &after_state {
-        if let Some((_, before_value)) = before_state.iter().find(|(k, _)| k == key) {
-            if before_value != after_value {
-                println!("≠ {} (changed)", String::from_utf8_lossy(key));
+        let key_str = String::from_utf8_lossy(key);
+        if !key_str.starts_with("_internal") {
+            if let Some((_, before_value)) = before_state.iter().find(|(k, _)| k == key) {
+                if before_value != after_value {
+                    println!("≠ {} (changed)", key_str);
+                }
             }
         }
     }
@@ -387,11 +473,11 @@ pub fn handle_revert(storage: &CommitStorage, commit_hash: &str) -> Result<()> {
 pub fn handle_diff(storage: &CommitStorage, from: &str, to: &str) -> Result<()> {
     let from_bytes = hex::decode(from)?;
     let from_array: [u8; 32] = from_bytes.try_into()
-        .map_err(|_| GitDBError::InvalidInput("Invalid commit hash length".into()))?;
+        .map_err(|_| BranchDBError::InvalidInput("Invalid commit hash length".into()))?;
     
     let to_bytes = hex::decode(to)?;
     let to_array: [u8; 32] = to_bytes.try_into()
-        .map_err(|_| GitDBError::InvalidInput("Invalid commit hash length".into()))?;
+        .map_err(|_| BranchDBError::InvalidInput("Invalid commit hash length".into()))?;
     
     let diffs = storage.get_commit_diffs(&from_array, &to_array)?;
     
@@ -420,7 +506,7 @@ pub fn handle_history(storage: &CommitStorage, limit: Option<usize>) -> Result<(
 
 pub fn handle_init(path: &str) -> Result<()> {
     if Path::new(path).exists() {
-        return Err(GitDBError::InvalidInput("Path already exists".into()));
+        return Err(BranchDBError::InvalidInput("Path already exists".into()));
     }
     
     fs::create_dir_all(path)?;
@@ -431,23 +517,27 @@ pub fn handle_init(path: &str) -> Result<()> {
 
 pub fn handle_checkout(storage: &CommitStorage, target: &str) -> Result<()> {
     // Try as branch first
-    if let Ok(Some(branch_data)) = storage.db.get(target.as_bytes()) {
-        storage.db.put(b"HEAD", branch_data)?;
+    let branch_key = format!("branch:{}", target);
+    if let Some(branch_head) = storage.db.get(branch_key.as_bytes())? {
+        storage.db.put(b"HEAD", &branch_head)?;
         println!("Switched to branch '{}'", target);
         return Ok(());
     }
 
     // Try as commit hash
-    let hash_bytes = hex::decode(target)
-        .map_err(|_| GitDBError::InvalidInput("Invalid commit hash or branch name".into()))?;
-    
-    if storage.db.get(&hash_bytes)?.is_none() {
-        return Err(GitDBError::InvalidInput("Commit not found".into()));
+    if target.len() == 64 { // Basic hex hash check
+        if let Ok(hash_bytes) = hex::decode(target) {
+            if storage.db.get(&hash_bytes)?.is_some() {
+                storage.db.put(b"HEAD", &hash_bytes)?;
+                println!("Switched to commit {}", target);
+                return Ok(());
+            }
+        }
     }
 
-    storage.db.put(b"HEAD", &hash_bytes)?;
-    println!("Switched to commit {}", target);
-    Ok(())
+    Err(BranchDBError::InvalidInput(
+        format!("No branch or commit found with reference '{}'", target)
+    ))
 }
 
 pub fn handle_log(storage: &CommitStorage, verbose: bool) -> Result<()> {
@@ -468,5 +558,87 @@ pub fn handle_log(storage: &CommitStorage, verbose: bool) -> Result<()> {
         current_hash = commit.parents.get(0).cloned();
     }
     
+    Ok(())
+}
+
+pub fn handle_branch_list(branch_mgr: &BranchManager, verbose: bool) -> Result<()> {
+    let branches = branch_mgr.list_branches()?;
+    let current = branch_mgr.get_current_branch()?;
+    
+    println!("Branches:");
+    for branch in branches {
+        if current.as_ref() == Some(&branch) {
+            print!("* ");
+        } else {
+            print!("  ");
+        }
+        
+        print!("{}", branch);
+        
+        if verbose {
+            if let Some(commit_hash) = branch_mgr.get_branch_head(&branch)? {
+                println!(" ({})", hex::encode(commit_hash));
+            } else {
+                println!(" (no commit)");
+            }
+        } else {
+            println!();
+        }
+    }
+    Ok(())
+}
+
+pub fn handle_merge(storage: &CommitStorage, branch_name: &str) -> Result<()> {
+    let branch_key = format!("branch:{}", branch_name);
+    let branch_head = storage.db.get(branch_key.as_bytes())?
+        .ok_or_else(|| BranchDBError::InvalidInput(format!("Branch {} not found", branch_name)))?;
+    
+    let current_head = storage.db.get(b"HEAD")?
+        .ok_or_else(|| BranchDBError::InvalidInput("HEAD not found".into()))?;
+    
+    if branch_head == current_head {
+        return Err(BranchDBError::InvalidInput("Already up to date".into()));
+    }
+    
+    let mut current_engine = CrdtEngine::new();
+    let mut branch_engine = CrdtEngine::new();
+    
+    // Helper function to load state from a commit hash
+    fn load_state(storage: &CommitStorage, mut hash: Vec<u8>, engine: &mut CrdtEngine) -> Result<()> {
+        while !hash.is_empty() {
+            // Convert Vec<u8> to [u8; 32]
+            let hash_array: [u8; 32] = hash.as_slice().try_into()
+                .map_err(|_| BranchDBError::InvalidInput("Invalid commit hash length".into()))?;
+            
+            let commit = storage.get_commit_by_hash(&hash_array)?;
+            for change in &commit.changes {
+                engine.apply_change(change)?;
+            }
+            hash = commit.parents.get(0).map(|p| p.to_vec()).unwrap_or_default();
+        }
+        Ok(())
+    }
+    
+    // Load current branch state
+    load_state(storage, current_head.to_vec(), &mut current_engine)?;
+    
+    // Load other branch state
+    load_state(storage, branch_head.to_vec(), &mut branch_engine)?;
+    
+    // Merge the states
+    let changes = merge_states(&mut current_engine, &branch_engine)?;
+    
+    if changes.is_empty() {
+        println!("Already up to date");
+        return Ok(());
+    }
+    
+    // Create merge commit
+    let hash = storage.create_commit(
+        &format!("Merge branch '{}'", branch_name),
+        changes
+    )?;
+    
+    println!("Created merge commit: {}", hex::encode(hash));
     Ok(())
 }

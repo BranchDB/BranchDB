@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use crate::error::{GitDBError, Result};
+use crate::error::{BranchDBError, Result};
 use std::collections::HashMap;
 use crate::core::models::Change;
 
@@ -64,7 +64,7 @@ impl CrdtEngine {
                     }
                     // Type mismatch
                     _ => {
-                        return Err(GitDBError::TypeMismatch(format!("Type mismatch on merge for ID: {}", id)));
+                        return Err(BranchDBError::TypeMismatch(format!("Type mismatch on merge for ID: {}", id)));
                     }
                 }
             }

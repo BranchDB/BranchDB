@@ -2,10 +2,10 @@ use rocksdb::{DB, Options};
 use blake3;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::core::models::{Commit, Change};
-use crate::error::{GitDBError, Result};
+use crate::error::{BranchDBError, Result};
 use std::sync::Arc;
 use std::collections::HashMap;
-use crate::core::crdt::CrdtEngine;
+use crate::core::crdt::{CrdtEngine, CrdtValue};
 
 pub struct CommitStorage {
     pub db: Arc<DB>,
@@ -23,7 +23,7 @@ impl CommitStorage {
     
     pub fn get_commit_by_hash(&self, hash: &[u8; 32]) -> Result<Commit> {
         let raw = self.db.get(hash)?
-            .ok_or_else(|| GitDBError::InvalidInput("Commit not found".into()))?;
+            .ok_or_else(|| BranchDBError::InvalidInput("Commit not found".into()))?;
         bincode::deserialize(&raw).map_err(Into::into)
     }
 
@@ -34,7 +34,7 @@ impl CommitStorage {
                 bytes.copy_from_slice(&raw);
                 Ok(Some(bytes))
             }
-            Some(_) => Err(GitDBError::InvalidInput("HEAD contains invalid data".into())),
+            Some(_) => Err(BranchDBError::InvalidInput("HEAD contains invalid data".into())),
             None => Ok(None),
         }
     }
@@ -64,7 +64,7 @@ impl CommitStorage {
         // Verify we can deserialize immediately after serializing
         let test_deserialize: Commit = bincode::deserialize(&serialized)?;
         if test_deserialize.message != commit.message {
-            return Err(GitDBError::CorruptData("Serialization roundtrip failed".into()));
+            return Err(BranchDBError::CorruptData("Serialization roundtrip failed".into()));
         }
 
         let checksum = blake3::hash(&serialized);
@@ -291,6 +291,50 @@ impl CommitStorage {
             }
             None => println!("Commit not found"),
         }
+        Ok(())
+    }
+
+    pub fn get_table_schema(&self, table: &str, commit_hash: Option<&[u8]>) -> Result<serde_json::Value> {
+        // If no specific commit hash is provided, use the current state
+        if commit_hash.is_none() {
+            let key = format!("{}:!schema", table);
+            if let Some(data) = self.db.get(key.as_bytes())? {
+                return serde_json::from_slice(&data).map_err(Into::into);
+            }
+            return Ok(serde_json::json!({}));
+        }
+
+        // For historical schema lookups
+        let hash = commit_hash.unwrap();
+        let mut current_hash = hash.to_vec();
+        
+        while !current_hash.is_empty() {
+            let hash_array: [u8; 32] = current_hash.as_slice().try_into()
+                .map_err(|_| BranchDBError::InvalidInput("Invalid commit hash length".into()))?;
+            
+            let commit = self.get_commit_by_hash(&hash_array)?;
+            
+            // Check if this commit modified the schema
+            for change in &commit.changes {
+                if change.table() == table && matches!(change, Change::Update { id, .. } | Change::Insert { id, .. } if id == "!schema") {
+                    if let Change::Insert { value, .. } | Change::Update { value, .. } = change {
+                        let val: CrdtValue = bincode::deserialize(value)?;
+                        if let CrdtValue::Register(data) = val {
+                            return serde_json::from_slice(&data).map_err(Into::into);
+                        }
+                    }
+                }
+            }
+            
+            current_hash = commit.parents.get(0).map(|p| p.to_vec()).unwrap_or_default();
+        }
+
+        Ok(serde_json::json!({}))
+    }
+    
+    pub fn update_table_schema(&self, table: &str, schema: &serde_json::Value) -> Result<()> {
+        let key = format!("{}:!schema", table);
+        self.db.put(key.as_bytes(), serde_json::to_vec(schema)?)?;
         Ok(())
     }
 }
